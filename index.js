@@ -4,14 +4,14 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cheerio = require('cheerio');
 const ExcelJS = require('exceljs');
 const { db } = require('./firebaseConfig');
-const { collection, setDoc, doc, getDocs,getDoc } = require('firebase/firestore');
+const { collection, setDoc, doc, getDocs, getDoc } = require('firebase/firestore');
 
 const app = express();
 const PORT = process.env.PORT || 3011;
 
 app.use(express.json());
 
-const docName = "Akash_Doc1111";
+const docName = "Akash_Doc1511";
 
 // List of User-Agents to rotate
 const userAgents = [
@@ -160,7 +160,7 @@ async function searchEmails(name, docName, location) {
 
             const page = await browser.newPage();
             const emails = new Set();
-             const query = `${name} @gmail.com @yahoo.com senior elderly retired site:linkedin.com ${location}`;
+             const query = `${name} @gmail.com senior site:linkedin.com ${location}`;
 
 
             // Add a random delay before navigating
@@ -210,7 +210,7 @@ async function searchEmails(name, docName, location) {
                     }).catch(() => null); 
                     if (isButtonEnabled) {
                         // Wait for the "More Results" button to be enabled
-                        await page.waitForSelector('#more-results:not([disabled])', { timeout: 10000 });
+                        await page.waitForSelector('#more-results:not([disabled])', { timeout: 60000 });
 
                         // Apply random delay before clicking the "More Results" button
                         await delay(randomDelay(5000, 10000));  // Random delay before clicking
@@ -224,7 +224,7 @@ async function searchEmails(name, docName, location) {
                         await page.waitForSelector('.react-results--main li', { timeout: 60000 });
 
                         // Re-query the "More Results" button after the page has been updated
-                        isButtonEnabled = await page.waitForSelector('#more-results:not([disabled])', { timeout: 10000 }).catch(()=>
+                        isButtonEnabled = await page.waitForSelector('#more-results:not([disabled])', { timeout: 60000 }).catch(()=>
                          null
                         );
                        
@@ -243,41 +243,47 @@ async function searchEmails(name, docName, location) {
 
             await browser.close();
 
-            const docRef = doc(collection(db, 'scrapeddata_linkedin'), docName);
+            const docRef = doc(collection(db, 'scrapeddata_facebook'), docName);
 
-            try {
-                // Fetch all documents in the collection
-                const allDocsSnapshot = await getDocs(collection(db, 'scrapeddata_linkedin'));
-                
-                // Aggregate emails from all documents to check for duplicates
-                const allEmailsSet = new Set();
-                allDocsSnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    if (data.emails) {
-                        data.emails.forEach(email => allEmailsSet.add(email));
-                    }
-                });
-                
-                // Filter new emails to remove duplicates
-                const uniqueEmails = Array.from(emails).filter(email => !allEmailsSet.has(email));
-                const allEmails = Array.from(new Set([...allEmailsSet, ...uniqueEmails]));
-                
-                await setDoc(docRef, {
-                    name,
-                    emails: allEmails,
-                    timestamp: new Date()
-                });
-                console.log(`Saved ${allEmails.length} emails to Firestore with custom document ID: ${docName}`);
-            } catch (error) {
-                console.error('Error saving emails to Firestore:', error);
-            }
+try {
+    // Fetch all documents in the collection
+    const allDocsSnapshot = await getDocs(collection(db, 'scrapeddata_facebook'));
 
-            return uniqueEmails;
+    // Aggregate emails from all documents to check for duplicates
+    const allEmailsSet = new Set();
+    allDocsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.emails) {
+            data.emails.forEach(email => allEmailsSet.add(email));
+        }
+    });
+
+    // Get existing emails in the current document (docRef)
+    const currentDocSnapshot = await getDoc(docRef);
+    const currentDocEmails = currentDocSnapshot.exists() ? currentDocSnapshot.data().emails || [] : [];
+
+    // Filter current document emails to remove duplicates
+    const uniqueEmails = Array.from(emails).filter(email => !allEmailsSet.has(email));
+
+    // Combine current doc's emails with new unique emails
+    const updatedEmails = Array.from(new Set([...currentDocEmails, ...uniqueEmails]));
+
+    // Update the document with the combined unique emails
+    await setDoc(docRef, {
+        name,
+        emails: updatedEmails,
+        timestamp: new Date()
+    });
+    console.log(`Added ${uniqueEmails.length} new unique emails to Firestore with custom document ID: ${docName}`);
+    return uniqueEmails;
+} catch (error) {
+    console.error('Error saving emails to Firestore:', error);
+    return uniqueEmails;
+}
         } catch (error) {
             console.error('Error extracting emails:', error);
             if (!error.message.includes("TimeoutError: Waiting for selector `#more-results:not([disabled])` failed")){
                 retries = 0;
-                console.log("UniqueEmails--->",uniqueEmails);
                 return uniqueEmails;
             } else {
                 retries--;
@@ -300,7 +306,7 @@ app.get('/download', async (req, res) => {
     }
 
     try {
-        const docRef = doc(collection(db, 'scrapeddata_linkedin'), docName);
+        const docRef = doc(collection(db, 'scrapeddata_facebook'), docName);
         const docSnapshot = await getDoc(docRef);
 
         if (!docSnapshot.exists()) {
@@ -350,21 +356,28 @@ app.post('/extract-emails', async (req, res) => {
 
     try {
         console.log(`Received request to search emails for name: "${name}" with custom document name: "${docName}"`);
-        const emails = await searchEmails(name, docName,location);
+        const emails = await searchEmails(name, docName, location);
         
-        const docRef = doc(collection(db, 'scrapeddata_linkedin'), docName);
+        const docRef = doc(collection(db, 'scrapeddata_facebook'), docName);
         const docSnapshot = await getDoc(docRef);
+        
+        // Fetch existing emails from the document and create a Set
         const allexistingEmails = new Set(docSnapshot.exists() ? docSnapshot.data().emails : []);
+        
+       
 
-        console.log("Total Emails After Push -->",allexistingEmails.length);
-
-        res.json({totalNewEmails:emails.length,totalEmailsInDoc: allexistingEmails.length });
+        res.json({
+            totalNewEmails: emails.length,
+            totalEmailsInDoc: allexistingEmails.size,
+            newEmailsInserted: emails 
+        });
 
     } catch (error) {
         console.error('Error extracting emails:', error);
         res.status(500).json({ error: 'An error occurred while extracting emails' });
     }
 });
+
 
 // Start the Express server
 app.listen(PORT, () => {
